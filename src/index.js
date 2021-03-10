@@ -60,10 +60,13 @@ class Bree extends EventEmitter {
       // (can be overridden on a per job basis)
       // <https://nodejs.org/api/worker_threads.html#worker_threads_new_worker_filename_options>
       worker: {},
-      // Custom handler to execute when error events are emmited by the workers or when they exit
+      // Custom handler to execute when error events are emitted by the workers or when they exit
       // with non-zero code
       // pass in a callback function with following signature: `(error, workerMetadata) => { // custom handling here }`
       errorHandler: null,
+      // Custom handler executed when a `message` event is received from a worker.
+      // A special 'done' even is also broadcasted while leaving worker shutdown logic in place.
+      workerMessageHandler: null,
       //
       // if you set this to `true`, then a second arg is passed to log output
       // and it will be an Object with `{ worker: Object }` set, for example:
@@ -233,7 +236,6 @@ class Bree extends EventEmitter {
   run(name) {
     debug('run', name);
     if (name) {
-      this.config.logger.info(new Date());
       const job = this.config.jobs.find((j) => j.name === name);
       if (!job) {
         throw new Error(`Job "${name}" does not exist`);
@@ -286,22 +288,25 @@ class Bree extends EventEmitter {
         );
       });
       this.workers[name].on('message', (message) => {
+        const metadata = this.getWorkerMetadata(name, { message });
+
+        if (this.config.workerMessageHandler) {
+          this.config.workerMessageHandler({
+            name,
+            ...metadata
+          });
+        } else if (message === 'done') {
+          this.config.logger.info(`${prefix} signaled completion`, metadata);
+        } else {
+          this.config.logger.info(`${prefix} sent a message`, metadata);
+        }
+
         if (message === 'done') {
-          this.config.logger.info(
-            `${prefix} signaled completion`,
-            this.getWorkerMetadata(name)
-          );
           this.workers[name].removeAllListeners('message');
           this.workers[name].removeAllListeners('exit');
           this.workers[name].terminate();
           delete this.workers[name];
-          return;
         }
-
-        this.config.logger.info(
-          `${prefix} sent a message`,
-          this.getWorkerMetadata(name, { message })
-        );
       });
       // NOTE: you cannot catch messageerror since it is a Node internal
       //       (if anyone has any idea how to catch this in tests let us know)
